@@ -1,0 +1,3 @@
+# Mirror the CLI hierarchy in the knowledge base
+
+Each command and nested subcommand is identified by its ordered command path, and its Custom Guide mirrors that hierarchy as directories and Markdown files—for example, `mani docker compose up` maps to `docker/compose/up.md`. Ordinary lookup accepts only command and subcommand names; options, operands, exit status, and failure output belong to `mani explain`. This keeps invocation and storage predictable without introducing separate topic identifiers or guessing where a Command Path ends, at the cost of tying guide paths to the CLI's command structure.

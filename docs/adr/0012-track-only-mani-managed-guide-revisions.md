@@ -1,0 +1,3 @@
+# Track only Mani-managed guide revisions
+
+Before Mani replaces an existing Custom Guide, it stores a reverse unified diff with the old and new content hashes under `.mani/history/` in the Knowledge Base Root. Guide Revisions cover only Mani-managed saves and contain no prompts, Diagnostic Output, or other Generation Context; direct edits made outside Mani are not watched or reconstructed. Mani retains the latest 20 revisions per guide by default, allows a configured limit from 0 through 100, and prunes the oldest revision only after a newer save succeeds; `0` disables history. Restoring an older revision first records the current guide as a new revision, so restoration is itself undoable.

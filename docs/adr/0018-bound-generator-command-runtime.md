@@ -1,0 +1,3 @@
+# Bound Generator Command runtime
+
+Mani runs the Generator Command inside the TUI and renders stdout as a read-only live Markdown preview. Accept and edit actions remain disabled until the command exits successfully and the complete document passes validation. `Esc` cancels by sending an interrupt before terminating the process after a short grace period. If neither stdout nor stderr shows activity for 35 seconds, the UI displays an inactivity warning and the remaining time; after 270 seconds total, Mani terminates the command. Both durations are easily configurable in `config.toml`; cancellation, timeout, or failure discards the partial preview, leaves the existing Custom Guide untouched, and exposes captured stderr in a collapsible error panel.

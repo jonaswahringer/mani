@@ -1,0 +1,3 @@
+# Limit LLM generation context
+
+Mani may generate a draft using only the Command Path, Official Documentation, OS, shell and tool versions, a Relevant Command, and Diagnostic Output that the user explicitly pastes or pipes into Mani. When refining, the existing Custom Guide is also included so the model can preserve and improve the user's material. The Relevant Command appears collapsed and unselected during normal generation, but preselected for `mani explain`; the user still confirms the complete bundle before sending. Working-directory paths, environment values, automatically captured terminal output, unrelated recent commands, and unrelated file contents remain outside the Generation Context.
