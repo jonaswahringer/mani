@@ -69,6 +69,7 @@ pub struct HelpTopic {
     pub command_path: CommandPath,
     pub custom: Option<Document>,
     pub official: Option<Document>,
+    custom_guide_path: PathBuf,
     command_help: Option<Document>,
 }
 
@@ -85,6 +86,10 @@ impl HelpTopic {
             .as_ref()
             .map(|_| SourceKind::Custom)
             .or_else(|| self.official.as_ref().map(|_| SourceKind::Official))
+    }
+
+    pub fn custom_guide_path(&self) -> &Path {
+        &self.custom_guide_path
     }
 
     pub fn short_output(&self) -> Option<&str> {
@@ -105,6 +110,7 @@ impl HelpTopic {
         official: Option<Document>,
     ) -> Self {
         Self {
+            custom_guide_path: PathBuf::from("/guides").join(command_path.guide_relative_path()),
             command_path,
             custom,
             official,
@@ -136,7 +142,10 @@ impl<R: ProcessRunner> Catalog<R> {
     }
 
     pub fn resolve(&self, command_path: CommandPath) -> Result<HelpTopic, CatalogError> {
-        let custom = self.resolve_custom(&command_path)?;
+        let custom_guide_path = self
+            .knowledge_base_root
+            .join(command_path.guide_relative_path());
+        let custom = self.resolve_custom(&custom_guide_path)?;
         let man = self.resolve_man(&command_path);
         let command_help = if man.is_none() || custom.is_none() {
             self.resolve_command_help(&command_path)
@@ -149,26 +158,32 @@ impl<R: ProcessRunner> Catalog<R> {
             command_path,
             custom,
             official,
+            custom_guide_path,
             command_help,
         })
     }
 
-    fn resolve_custom(&self, command_path: &CommandPath) -> Result<Option<Document>, CatalogError> {
-        let path = self
-            .knowledge_base_root
-            .join(command_path.guide_relative_path());
-        let bytes = match fs::read(&path) {
+    fn resolve_custom(&self, path: &Path) -> Result<Option<Document>, CatalogError> {
+        let bytes = match fs::read(path) {
             Ok(bytes) => bytes,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-            Err(source) => return Err(CatalogError::ReadGuide { path, source }),
+            Err(source) => {
+                return Err(CatalogError::ReadGuide {
+                    path: path.to_path_buf(),
+                    source,
+                });
+            }
         };
         let content = String::from_utf8(bytes).map_err(|_| CatalogError::InvalidGuide {
-            path: path.clone(),
+            path: path.to_path_buf(),
             source: GuideError::InvalidUtf8,
         })?;
-        Document::custom(content, &path)
+        Document::custom(content, path)
             .map(Some)
-            .map_err(|source| CatalogError::InvalidGuide { path, source })
+            .map_err(|source| CatalogError::InvalidGuide {
+                path: path.to_path_buf(),
+                source,
+            })
     }
 
     fn resolve_man(&self, command_path: &CommandPath) -> Option<Document> {

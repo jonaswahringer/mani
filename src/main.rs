@@ -14,7 +14,7 @@ use mani::paths::AppPaths;
 use mani::viewer::{LayoutKind, Viewer, ViewerEffect, ViewerFrame, ViewerInput};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
@@ -107,31 +107,32 @@ fn run(cli: Cli) -> Result<(), AppError> {
         return Ok(());
     }
 
-    let selected = if cli.custom {
-        SourceKind::Custom
+    let requested_source = if cli.custom {
+        Some(SourceKind::Custom)
     } else if cli.official {
-        SourceKind::Official
+        Some(SourceKind::Official)
     } else {
-        topic
-            .preferred_source()
-            .ok_or_else(|| AppError::MissingAll {
-                command_path: command_path.clone(),
-                custom_path: paths
-                    .knowledge_base_root
-                    .join(command_path.guide_relative_path()),
-            })?
+        None
     };
-    let document = topic
-        .document(selected)
-        .ok_or_else(|| AppError::MissingSelected {
+    let selected = requested_source
+        .or_else(|| topic.preferred_source())
+        .unwrap_or(SourceKind::Custom);
+
+    if requested_source.is_some() && topic.document(selected).is_none() {
+        return Err(AppError::MissingSelected {
             requested_source: selected,
             command_path: command_path.clone(),
-            custom_path: paths
-                .knowledge_base_root
-                .join(command_path.guide_relative_path()),
-        })?;
+            custom_path: topic.custom_guide_path().to_path_buf(),
+        });
+    }
 
     if cli.print {
+        let document = topic
+            .document(selected)
+            .ok_or_else(|| AppError::MissingAll {
+                command_path: command_path.clone(),
+                custom_path: topic.custom_guide_path().to_path_buf(),
+            })?;
         write_document(&document.content, &config.theme, cli.color)?;
         return Ok(());
     }
@@ -238,6 +239,12 @@ fn run_viewer(mut viewer: Viewer, theme: &Theme) -> Result<(), AppError> {
 }
 
 fn key_to_input(code: KeyCode, frame: &ViewerFrame) -> Option<ViewerInput> {
+    if frame.recovery.is_some() {
+        return match code {
+            KeyCode::Char('q') => Some(ViewerInput::Quit),
+            _ => None,
+        };
+    }
     if frame.search_input.is_some() {
         return match code {
             KeyCode::Enter => Some(ViewerInput::SubmitSearch),
@@ -284,9 +291,10 @@ fn draw_viewer(frame: &mut ratatui::Frame<'_>, viewer: &Viewer, theme: &Theme) {
         ])
         .split(area);
 
-    let source_name = match view.active_source {
-        SourceKind::Custom => "CUSTOM",
-        SourceKind::Official => "OFFICIAL",
+    let source_name = match (&view.recovery, view.active_source) {
+        (Some(_), _) => "NO SOURCE",
+        (None, SourceKind::Custom) => "CUSTOM",
+        (None, SourceKind::Official) => "OFFICIAL",
     };
     let header = Text::from(vec![
         Line::from(vec![
@@ -301,19 +309,25 @@ fn draw_viewer(frame: &mut ratatui::Frame<'_>, viewer: &Viewer, theme: &Theme) {
     ]);
     frame.render_widget(Paragraph::new(header), vertical[0]);
 
-    match view.layout {
-        LayoutKind::OutlineBrowser => {
-            let horizontal = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([Constraint::Length(26), Constraint::Min(30)])
-                .split(vertical[1]);
-            draw_outline(frame, horizontal[0], &view, theme);
-            draw_document(frame, horizontal[1], &view, theme);
+    if view.recovery.is_some() {
+        draw_recovery(frame, vertical[1], &view, theme);
+    } else {
+        match view.layout {
+            LayoutKind::OutlineBrowser => {
+                let horizontal = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([Constraint::Length(26), Constraint::Min(30)])
+                    .split(vertical[1]);
+                draw_outline(frame, horizontal[0], &view, theme);
+                draw_document(frame, horizontal[1], &view, theme);
+            }
+            LayoutKind::MinimalPager => draw_document(frame, vertical[1], &view, theme),
         }
-        LayoutKind::MinimalPager => draw_document(frame, vertical[1], &view, theme),
     }
 
-    let footer = if let Some(input) = &view.search_input {
+    let footer = if view.recovery.is_some() {
+        " q quit".into()
+    } else if let Some(input) = &view.search_input {
         format!(" /{input}")
     } else if let Some(summary) = &view.search_summary {
         format!(" {summary}   n/N match   / search   q quit")
@@ -326,6 +340,41 @@ fn draw_viewer(frame: &mut ratatui::Frame<'_>, viewer: &Viewer, theme: &Theme) {
         Paragraph::new(footer).style(Style::default().add_modifier(Modifier::REVERSED)),
         vertical[2],
     );
+}
+
+fn draw_recovery(frame: &mut ratatui::Frame<'_>, area: Rect, view: &ViewerFrame, theme: &Theme) {
+    let recovery = view.recovery.as_ref().expect("recovery frame");
+    let generation_note = if recovery.generation_available {
+        "Press c to create a Generated Draft."
+    } else {
+        "Draft generation is not configured."
+    };
+    let content = Text::from(vec![
+        Line::raw(""),
+        Line::styled(
+            format!("No help source was found for {}.", view.command_path),
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
+        Line::raw(""),
+        Line::raw("No official source is available."),
+        Line::raw(generation_note),
+        Line::raw(""),
+        Line::raw("Create a Custom Guide manually at:"),
+        Line::styled(
+            recovery.custom_guide_path.clone(),
+            style_from_spec(&theme.heading),
+        ),
+    ]);
+    let panel = Paragraph::new(content)
+        .alignment(Alignment::Center)
+        .wrap(Wrap { trim: false })
+        .block(
+            Block::default()
+                .title(" RECOVERY ")
+                .title_style(style_from_spec(&theme.warning))
+                .borders(Borders::ALL),
+        );
+    frame.render_widget(panel, area);
 }
 
 fn draw_outline(frame: &mut ratatui::Frame<'_>, area: Rect, view: &ViewerFrame, theme: &Theme) {

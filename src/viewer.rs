@@ -53,6 +53,13 @@ pub struct ViewerFrame {
     pub search_summary: Option<String>,
     pub can_switch_source: bool,
     pub page_size: usize,
+    pub recovery: Option<RecoveryFrame>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecoveryFrame {
+    pub custom_guide_path: String,
+    pub generation_available: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -131,10 +138,28 @@ impl Viewer {
     }
 
     pub fn frame(&self, area: Rect) -> ViewerFrame {
-        let document = self
-            .active_document()
-            .expect("the viewer always has an active document");
         let state = self.state();
+        let Some(document) = self.active_document() else {
+            return ViewerFrame {
+                layout: LayoutKind::MinimalPager,
+                command_path: self.topic.command_path.to_string(),
+                active_source: self.active_source,
+                source_label: self.topic.custom_guide_path().display().to_string(),
+                lines: Vec::new(),
+                scroll: 0,
+                headings: Vec::new(),
+                selected_heading: 0,
+                outline_focused: false,
+                search_input: None,
+                search_summary: None,
+                can_switch_source: false,
+                page_size: area.height.saturating_sub(3).max(1) as usize,
+                recovery: Some(RecoveryFrame {
+                    custom_guide_path: self.topic.custom_guide_path().display().to_string(),
+                    generation_available: false,
+                }),
+            };
+        };
         let search_summary = (!self.search_query.is_empty()).then(|| {
             if state.matches.is_empty() {
                 format!("0 matches for {}", self.search_query)
@@ -169,6 +194,7 @@ impl Viewer {
             search_summary,
             can_switch_source: self.topic.custom.is_some() && self.topic.official.is_some(),
             page_size: area.height.saturating_sub(3).max(1) as usize,
+            recovery: None,
         }
     }
 
@@ -496,6 +522,28 @@ mod tests {
         assert_eq!(
             viewer.frame(Rect::new(0, 0, 100, 20)).active_source,
             SourceKind::Custom
+        );
+    }
+
+    #[test]
+    fn missing_sources_produce_a_recovery_frame() {
+        let topic = HelpTopic::from_documents_for_test(
+            CommandPath::new(vec!["missing".into(), "tool".into()]).unwrap(),
+            None,
+            None,
+        );
+        let viewer = Viewer::new(topic, SourceKind::Custom);
+
+        let frame = viewer.frame(Rect::new(0, 0, 100, 20));
+
+        assert_eq!(frame.layout, LayoutKind::MinimalPager);
+        assert_eq!(frame.command_path, "missing tool");
+        assert_eq!(
+            frame.recovery,
+            Some(RecoveryFrame {
+                custom_guide_path: "/guides/missing/tool.md".into(),
+                generation_available: false,
+            })
         );
     }
 }

@@ -33,20 +33,13 @@ fn receive_until(receiver: &Receiver<Vec<u8>>, output: &mut Vec<u8>, needle: &[u
     false
 }
 
-#[test]
-fn interactive_view_opens_in_a_pty_and_restores_the_terminal_on_quit() {
-    let home = tempfile::tempdir().unwrap();
-    let bin = tempfile::tempdir().unwrap();
-    fs::write(
-        home.path().join("agent-topic.md"),
-        "# Agent Topic\n\nSearchable introduction.\n\n## Details\n\nMore help.\n",
-    )
-    .unwrap();
-    write_executable(
-        &bin.path().join("man"),
-        "#!/bin/sh\nif [ \"$1\" = '-w' ]; then\n  printf '/usr/share/man/man1/agent-topic.1.gz\\n'\nelse\n  printf 'AGENT-TOPIC(1)\\n\\nSearchable official text.\\n'\nfi\n",
-    );
-
+fn run_tui(
+    home: &std::path::Path,
+    bin: &std::path::Path,
+    topic: &str,
+    initial_marker: &[u8],
+    interactions: &[(&[u8], &[u8])],
+) -> Vec<u8> {
     let pair = native_pty_system()
         .openpty(PtySize {
             rows: 24,
@@ -56,13 +49,13 @@ fn interactive_view_opens_in_a_pty_and_restores_the_terminal_on_quit() {
         })
         .unwrap();
     let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_mani"));
-    command.arg("agent-topic");
-    command.env("MANI_HOME", home.path());
+    command.arg(topic);
+    command.env("MANI_HOME", home);
     command.env(
         "PATH",
         format!(
             "{}:{}",
-            bin.path().display(),
+            bin.display(),
             std::env::var("PATH").unwrap_or_default()
         ),
     );
@@ -88,21 +81,20 @@ fn interactive_view_opens_in_a_pty_and_restores_the_terminal_on_quit() {
     });
 
     let mut output = Vec::new();
-    if !receive_until(&receiver, &mut output, b"CUSTOM") {
+    if !receive_until(&receiver, &mut output, initial_marker) {
         let _ = child.kill();
-        panic!("Interactive View did not render before timeout");
+        panic!(
+            "Interactive View did not render before timeout: {:?}",
+            String::from_utf8_lossy(&output)
+        );
     }
-    writer.write_all(b"/Searchable\r").unwrap();
-    writer.flush().unwrap();
-    if !receive_until(&receiver, &mut output, b"1 of 1 matches") {
-        let _ = child.kill();
-        panic!("Interactive View search did not complete before timeout");
-    }
-    writer.write_all(b"\t").unwrap();
-    writer.flush().unwrap();
-    if !receive_until(&receiver, &mut output, b"OFFICIAL") {
-        let _ = child.kill();
-        panic!("Interactive View did not switch sources before timeout");
+    for (input, marker) in interactions {
+        writer.write_all(input).unwrap();
+        writer.flush().unwrap();
+        if !receive_until(&receiver, &mut output, marker) {
+            let _ = child.kill();
+            panic!("Interactive View did not respond before timeout");
+        }
     }
     writer.write_all(b"q").unwrap();
     writer.flush().unwrap();
@@ -128,21 +120,6 @@ fn interactive_view_opens_in_a_pty_and_restores_the_terminal_on_quit() {
     assert!(status.success());
     assert!(
         output
-            .windows(b"CUSTOM".len())
-            .any(|window| window == b"CUSTOM")
-    );
-    assert!(
-        output
-            .windows(b"OFFICIAL".len())
-            .any(|window| window == b"OFFICIAL")
-    );
-    assert!(
-        output
-            .windows(b"1 of 1 matches".len())
-            .any(|window| window == b"1 of 1 matches")
-    );
-    assert!(
-        output
             .windows(b"\x1b[?1049h".len())
             .any(|window| window == b"\x1b[?1049h")
     );
@@ -156,4 +133,54 @@ fn interactive_view_opens_in_a_pty_and_restores_the_terminal_on_quit() {
             .windows(b"\x1b[?25h".len())
             .any(|window| window == b"\x1b[?25h")
     );
+    output
+}
+
+#[test]
+fn interactive_view_opens_in_a_pty_and_restores_the_terminal_on_quit() {
+    let home = tempfile::tempdir().unwrap();
+    let bin = tempfile::tempdir().unwrap();
+    fs::write(
+        home.path().join("agent-topic.md"),
+        "# Agent Topic\n\nSearchable introduction.\n\n## Details\n\nMore help.\n",
+    )
+    .unwrap();
+    write_executable(
+        &bin.path().join("man"),
+        "#!/bin/sh\nif [ \"$1\" = '-w' ]; then\n  printf '/usr/share/man/man1/agent-topic.1.gz\\n'\nelse\n  printf 'AGENT-TOPIC(1)\\n\\nSearchable official text.\\n'\nfi\n",
+    );
+
+    let output = run_tui(
+        home.path(),
+        bin.path(),
+        "agent-topic",
+        b"CUSTOM",
+        &[(b"/Searchable\r", b"1 of 1 matches"), (b"\t", b"OFFICIAL")],
+    );
+
+    for marker in [b"CUSTOM".as_slice(), b"OFFICIAL", b"1 of 1 matches"] {
+        assert!(output.windows(marker.len()).any(|window| window == marker));
+    }
+}
+
+#[test]
+fn missing_sources_open_a_recovery_screen_with_the_custom_guide_path() {
+    let home = tempfile::tempdir().unwrap();
+    let bin = tempfile::tempdir().unwrap();
+    write_executable(&bin.path().join("man"), "#!/bin/sh\nexit 1\n");
+
+    let output = run_tui(home.path(), bin.path(), "missing-command", b"RECOVERY", &[]);
+    let output = String::from_utf8_lossy(&output);
+
+    assert!(output.contains("No help source was found for missing-command."));
+    for marker in [
+        "official",
+        "available.",
+        "Draft",
+        "generation",
+        "configured.",
+    ] {
+        assert!(output.contains(marker));
+    }
+    assert!(output.contains(&home.path().join("missing-command.md").display().to_string()));
 }
